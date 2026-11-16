@@ -1,0 +1,19 @@
+{
+  "campaign": {
+    "campaign_id": "coating_trial",
+    "title": "Synthetic coating experiment",
+    "groups": ["control", "process_b"],
+    "baseline": "control",
+    "metrics": [{"name": "yield_pct", "unit": "percent", "minimum": "0", "maximum": "100", "precision": 2}],
+    "min_samples": 2,
+    "max_bad_fraction": "0.2",
+    "window_hours": 24
+  },
+  "window": {"start": "2026-01-01T00:00:00Z", "end": "2026-01-02T00:00:00Z"},
+  "batches": [{"batch_id": "batch_one", "samples": [
+    {"sample_id": "sample_a", "group_id": "control", "event_time": "2026-01-01T01:00:00Z", "measurements": {"yield_pct": "71.20"}},
+    {"sample_id": "sample_b", "group_id": "control", "event_time": "2026-01-01T02:00:00Z", "measurements": {"yield_pct": "72.20"}},
+    {"sample_id": "sample_c", "group_id": "process_b", "event_time": "2026-01-01T03:00:00Z", "measurements": {"yield_pct": "78.50"}},
+    {"sample_id": "sample_d", "group_id": "process_b", "event_time": "2026-01-01T04:00:00Z", "measurements": {"yield_pct": "79.50"}}
+  ]}]
+}
