@@ -10,6 +10,16 @@
 
 分析结果冻结来源版本与内容摘要。发布需两个不同评审人同意，由第三人执行；任何否决都会阻止发布。证据导出和对账接口可核对批次、样本、分析和发布内容。
 
+## 趋势预警与复核
+
+监测规则（monitor）针对某个实验组的单个指标，声明相对基线组均值的偏离百分比阈值、连续窗口要求（persistence）、窗口数量和锚点时间。窗口沿 `window_hours` 网格左闭右开排列，形成明确的窗口序列，并对序列内容计算摘要。
+
+对监测规则执行评估时，逐窗口复用质量门禁与组间统计：合格窗口参与偏离判断，不合格窗口（拒收率超限、样本不足、缺指标等）保留具体门禁原因。判断结果分为持续异常（`persistent_deviation`，合格窗口中连续偏离达到 persistence）、偶然波动（`incidental_fluctuation`，有偏离但不连续）、资料不足（`insufficient_evidence`，合格窗口数低于 persistence）和无异常（`normal`）。每次评估冻结 source_revision、spec_version、逐窗口证据和判断摘要（judgment_sha）；同一来源版本重复评估幂等返回，不产生新的异常事项，新版本数据则追加判断版本，预警事项（alert）身份保持稳定。
+
+复核人员对预警作出确认（confirm）或驳回（reject），处置绑定提交时的 judgment_sha。两人可独立处置；同一人对同一判断重复提交相同内容按幂等处理，不同内容冲突拒绝，过期摘要返回 `version_conflict`。任一触发窗口因迟到测量、修正或作废变得不合格时，预警派生为 `suspended` 状态，不能继续作为发布依据，也不接受新处置；资料补齐后重新评估，原处置完整保留，并通过 `still_applies` 与派生状态（`stale`/`confirmed`/`rejected`）说明是否仍适用于当前统计。
+
+分析评审与发布在同一事务内检查窗口重叠的预警：未处置的持续异常、挂起预警以及基于过期判断的处置都会以 `alert_gate_blocked` 阻止背书；成功的评审和发布返回关联的预警证据。分析的 alert-evidence 端点、预警详情、判断版本列表和处置历史可追溯触发窗口、质量门禁原因和完整处置经过；证据核验覆盖监测规则、判断摘要、版本连续性和处置引用。
+
 ## 离线演示与检查
 
 python -m atelier.cli --fixture fixtures/synthetic_experiment.json 会在临时数据库导入合成批次，计算对照指标，取得两份评审并输出发布摘要；演示不访问网络。业务测试命令是 python -m unittest discover -s tests -v；语法检查命令是 python -m compileall -q atelier。

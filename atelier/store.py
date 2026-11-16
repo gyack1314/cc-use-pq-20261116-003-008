@@ -104,6 +104,56 @@ CREATE TABLE IF NOT EXISTS releases (
     PRIMARY KEY(campaign_id,release_id),
     FOREIGN KEY(campaign_id,analysis_id) REFERENCES analyses(campaign_id,analysis_id)
 );
+CREATE TABLE IF NOT EXISTS monitors (
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id),
+    monitor_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    content_sha TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(campaign_id,monitor_id)
+);
+CREATE TABLE IF NOT EXISTS alerts (
+    campaign_id TEXT NOT NULL,
+    alert_id TEXT NOT NULL,
+    monitor_id TEXT NOT NULL,
+    sequence_sha TEXT NOT NULL,
+    current_version INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(campaign_id,alert_id),
+    FOREIGN KEY(campaign_id,monitor_id) REFERENCES monitors(campaign_id,monitor_id)
+);
+CREATE TABLE IF NOT EXISTS alert_judgments (
+    campaign_id TEXT NOT NULL,
+    alert_id TEXT NOT NULL,
+    judgment_version INTEGER NOT NULL,
+    source_revision INTEGER NOT NULL,
+    spec_version INTEGER NOT NULL,
+    request_sha TEXT NOT NULL,
+    judgment_sha TEXT NOT NULL,
+    classification TEXT NOT NULL,
+    all_qualified INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(campaign_id,alert_id,judgment_version),
+    FOREIGN KEY(campaign_id,alert_id) REFERENCES alerts(campaign_id,alert_id)
+);
+CREATE INDEX IF NOT EXISTS idx_judgments_revision
+    ON alert_judgments(campaign_id,alert_id,source_revision);
+CREATE TABLE IF NOT EXISTS alert_dispositions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id TEXT NOT NULL,
+    alert_id TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    note TEXT NOT NULL,
+    judgment_sha TEXT NOT NULL,
+    judgment_version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(campaign_id,alert_id,reviewer,judgment_sha),
+    FOREIGN KEY(campaign_id,alert_id) REFERENCES alerts(campaign_id,alert_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dispositions_alert
+    ON alert_dispositions(campaign_id,alert_id,id);
 """
 
 

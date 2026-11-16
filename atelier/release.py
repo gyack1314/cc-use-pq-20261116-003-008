@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .alerts import AlertManager
 from .domain import DomainError, canonical, digest, require_identifier, utc_now
 from .store import Store
 
@@ -10,6 +11,19 @@ from .store import Store
 class Publisher:
     def __init__(self, store: Store):
         self.store = store
+        self.alerts = AlertManager(store)
+
+    def _alert_blockers(self, db, analysis: dict[str, Any]) -> list[dict[str, Any]]:
+        request = analysis["body"]["request"]
+        return self.alerts.blockers_for_window(
+            db, analysis["campaign_id"], request["start"], request["end"])
+
+    @staticmethod
+    def _raise_alert_gate(blockers: list[dict[str, Any]]) -> None:
+        if blockers:
+            ids = ", ".join(f"{item['alert_id']}({item['block_reason']})" for item in blockers)
+            raise DomainError("alert_gate_blocked",
+                             f"open, stale or suspended alerts must be resolved first: {ids}")
 
     def review(self, campaign_id: str, analysis_id: str, reviewer: str,
                decision: str, note: str, expected_sha: str) -> dict[str, Any]:
@@ -29,6 +43,8 @@ class Publisher:
                 raise DomainError("stale_analysis", "analysis no longer matches source revision")
             if not analysis["body"]["quality"]["passed"]:
                 raise DomainError("quality_failed", "quality gates prevent review")
+            blockers = self._alert_blockers(db, analysis)
+            self._raise_alert_gate(blockers)
             existing = db.execute("SELECT * FROM reviews WHERE campaign_id=? AND analysis_id=? AND reviewer=?",
                                   (campaign_id, analysis_id, reviewer)).fetchone()
             result = {"campaign_id": campaign_id, "analysis_id": analysis_id,
@@ -44,7 +60,10 @@ class Publisher:
                                                   note.strip(), expected_sha, now))
             self.store.audit(db, campaign_id, "analysis_reviewed", reviewer, analysis_id,
                              None, {**result, "created_at": now})
-            return {**result, "created_at": now, "replayed": False}
+            return {**result, "created_at": now, "replayed": False,
+                    "alert_evidence": self.alerts.evidence_for_window(
+                        db, campaign_id, analysis["body"]["request"]["start"],
+                        analysis["body"]["request"]["end"])}
 
     def publish(self, campaign_id: str, analysis_id: str, release_id: str,
                 actor: str, expected_sha: str) -> dict[str, Any]:
@@ -67,6 +86,8 @@ class Publisher:
                 raise DomainError("stale_analysis", "analysis no longer matches source revision")
             if not analysis["body"]["quality"]["passed"]:
                 raise DomainError("quality_failed", "quality gates prevent publication")
+            blockers = self._alert_blockers(db, analysis)
+            self._raise_alert_gate(blockers)
             decisions = db.execute("SELECT reviewer,decision,note,result_sha FROM reviews"
                                    " WHERE campaign_id=? AND analysis_id=? ORDER BY reviewer",
                                    (campaign_id, analysis_id)).fetchall()
@@ -90,7 +111,10 @@ class Publisher:
                         expected_sha, canonical(result), now))
             self.store.audit(db, campaign_id, "analysis_published", actor, release_id,
                              None, {"analysis_id": analysis_id, "release_sha": result["release_sha"]})
-            return result
+            return {**result,
+                    "alert_evidence": self.alerts.evidence_for_window(
+                        db, campaign_id, analysis["body"]["request"]["start"],
+                        analysis["body"]["request"]["end"])}
 
     def list_reviews(self, campaign_id: str, analysis_id: str) -> list[dict[str, Any]]:
         with self.store.connect() as db:

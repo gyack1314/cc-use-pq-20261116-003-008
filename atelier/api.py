@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from .analysis import Analyzer
+from .alerts import AlertManager
 from .domain import CampaignSpec, DomainError, integer, parse_time, require_identifier
 from .ingest import Ingestor
 from .inspection import Inspector
@@ -30,13 +31,15 @@ def create_app(database_path: str | None = None) -> FastAPI:
     query_service = QueryService(store)
     explorer = Explorer(store)
     lifecycle = Lifecycle(store)
+    alert_manager = AlertManager(store)
     app = FastAPI(title="Atelier Experiment Ledger", version="1.0.0")
 
     @app.exception_handler(DomainError)
     async def domain_error_handler(_, error: DomainError):
         status = 404 if error.code == "not_found" else 409 if error.code.endswith("conflict") or error.code in {
             "stale_analysis", "inactive_sample", "release_conflict", "review_rejected",
-            "reviews_missing", "self_publish", "quality_failed", "incompatible_spec"} else 422
+            "reviews_missing", "self_publish", "quality_failed", "incompatible_spec",
+            "alert_suspended", "alert_not_actionable", "alert_gate_blocked"} else 422
         return JSONResponse(status_code=status, content={"error": error.code, "detail": str(error)})
 
     @app.post("/campaigns", status_code=201)
@@ -185,6 +188,77 @@ def create_app(database_path: str | None = None) -> FastAPI:
     @app.get("/campaigns/{campaign_id}/releases/{release_id}/context")
     def release_context(campaign_id: str, release_id: str):
         return inspector.release_context(campaign_id, release_id)
+
+    @app.post("/campaigns/{campaign_id}/monitors/{monitor_id}", status_code=201)
+    def create_monitor(campaign_id: str, monitor_id: str, payload: dict[str, Any]):
+        return alert_manager.create_monitor(
+            require_identifier(campaign_id, "campaign_id"),
+            require_identifier(monitor_id, "monitor_id"), payload,
+            require_identifier(payload.get("actor"), "actor"))
+
+    @app.get("/campaigns/{campaign_id}/monitors")
+    def list_monitors(campaign_id: str):
+        return alert_manager.list_monitors(require_identifier(campaign_id, "campaign_id"))
+
+    @app.get("/campaigns/{campaign_id}/monitors/{monitor_id}")
+    def get_monitor(campaign_id: str, monitor_id: str):
+        return alert_manager.get_monitor(
+            require_identifier(campaign_id, "campaign_id"),
+            require_identifier(monitor_id, "monitor_id"))
+
+    @app.post("/campaigns/{campaign_id}/monitors/{monitor_id}/evaluate")
+    def evaluate_monitor(campaign_id: str, monitor_id: str, payload: dict[str, Any]):
+        return alert_manager.evaluate(
+            require_identifier(campaign_id, "campaign_id"),
+            require_identifier(monitor_id, "monitor_id"),
+            require_identifier(payload.get("actor"), "actor"))
+
+    @app.get("/campaigns/{campaign_id}/alerts")
+    def list_alerts(campaign_id: str, state: str | None = None):
+        return alert_manager.list_alerts(require_identifier(campaign_id, "campaign_id"), state)
+
+    @app.get("/campaigns/{campaign_id}/alerts/{alert_id}")
+    def get_alert(campaign_id: str, alert_id: str):
+        return alert_manager.get_alert(
+            require_identifier(campaign_id, "campaign_id"),
+            require_identifier(alert_id, "alert_id"))
+
+    @app.get("/campaigns/{campaign_id}/alerts/{alert_id}/judgments")
+    def alert_judgments(campaign_id: str, alert_id: str):
+        return alert_manager.list_judgments(
+            require_identifier(campaign_id, "campaign_id"),
+            require_identifier(alert_id, "alert_id"))
+
+    @app.get("/campaigns/{campaign_id}/alerts/{alert_id}/dispositions")
+    def alert_dispositions(campaign_id: str, alert_id: str):
+        return alert_manager.list_dispositions(
+            require_identifier(campaign_id, "campaign_id"),
+            require_identifier(alert_id, "alert_id"))
+
+    @app.post("/campaigns/{campaign_id}/alerts/{alert_id}/dispositions")
+    def dispose_alert(campaign_id: str, alert_id: str, payload: dict[str, Any]):
+        return alert_manager.dispose(
+            require_identifier(campaign_id, "campaign_id"),
+            require_identifier(alert_id, "alert_id"),
+            require_identifier(payload.get("reviewer"), "reviewer"),
+            payload.get("decision"), payload.get("note"),
+            payload.get("expected_judgment_sha"))
+
+    @app.get("/campaigns/{campaign_id}/analyses/{analysis_id}/alert-evidence")
+    def analysis_alert_evidence(campaign_id: str, analysis_id: str):
+        campaign_key = require_identifier(campaign_id, "campaign_id")
+        analysis_key = require_identifier(analysis_id, "analysis_id")
+        with store.connect() as db:
+            analysis = store.get_analysis(campaign_key, analysis_key, db)
+            window = analysis["body"]["request"]
+            evidence = alert_manager.evidence_for_window(db, campaign_key,
+                                                         window["start"], window["end"])
+            blockers = alert_manager.blockers_for_window(db, campaign_key,
+                                                         window["start"], window["end"])
+        return {"campaign_id": campaign_key, "analysis_id": analysis_key,
+                "window": {"start": window["start"], "end": window["end"]},
+                "evidence": evidence, "blockers": blockers,
+                "publishable": not blockers}
 
     @app.get("/campaigns/{campaign_id}/audits")
     def audits(campaign_id: str, since_id: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
